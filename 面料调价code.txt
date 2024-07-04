@@ -1,0 +1,150 @@
+using Kingdee.BOS.App.Data;
+using Kingdee.BOS.Core.DynamicForm.PlugIn;
+using Kingdee.BOS.Core.DynamicForm.PlugIn.Args;
+using Kingdee.BOS.Orm.DataEntity;
+using Kingdee.BOS.Util;
+using Kingdee.BOS.WebApi.Client;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using static Kingdee.K3.MFG.App.AppServiceContext;
+
+namespace SSML_TIAOJIA
+{
+    [Description("服务插件,审核更改数丝面料价格")]
+    [Kingdee.BOS.Util.HotUpdate]
+    public class Class1 : AbstractOperationServicePlugIn
+    {
+        public override void AfterExecuteOperationTransaction(AfterExecuteOperationTransaction e)
+        {
+            base.AfterExecuteOperationTransaction(e);
+
+            List<string> objects = new List<string>();
+            using (StreamReader reader = new StreamReader(@"C:\Program Files (x86)\Kingdee\K3Cloud\WebSite\urlpassword.txt"))
+            {
+                while (!reader.EndOfStream)
+                {
+                    string line = reader.ReadLine();
+
+                    objects.Add(line);
+                }
+            }
+            Console.WriteLine(objects.First().ToString());
+            Console.WriteLine(objects.Last().ToString());
+
+            K3CloudApiClient client = new K3CloudApiClient(objects.First().ToString());
+            var loginResult = client.ValidateLogin("6660023fee8b31", "Administrator", objects.Last().ToString(), 2052);
+            var resultType = JObject.Parse(loginResult)["LoginResultType"].Value<int>();
+            if (resultType == 1)
+            {
+                var ids = string.Join(",", e.DataEntitys.Select(o => o[0]));
+                var sql = string.Format("/*dialect*/SELECT * FROM TIXC_t_Cust_Entry100130 WHERE (F_TIXC_Combo_pzg = '1' OR F_TIXC_Combo_pzg = '2') AND FID IN ({0})", ids);
+                DynamicObjectCollection JGSQL = DbUtils.ExecuteDynamicObject(this.Context, sql);
+                if (JGSQL != null && JGSQL.Count > 0)
+                {
+                    for (int x = 0; x < JGSQL.Count; x++)
+                    {
+                        string ssclxl = Convert.ToString(JGSQL[x]["F_TIXC_Combo_pzg"]); //获取材料小类
+                        string ssmlcz = Convert.ToString(JGSQL[x]["F_TIXC_Combo_795"]); //获取面料材质
+                        string sscf = Convert.ToString(JGSQL[x]["F_TIXC_Combo_qku"]); //获取成分
+                        string sssz = Convert.ToString(JGSQL[x]["F_TIXC_Combo_9uj"]); //获取纱支
+                        string sskz = Convert.ToString(JGSQL[x]["F_TIXC_Combo_s58"]); //获取克重
+                        double ssc = Convert.ToDouble(JGSQL[x]["F_TIXC_Decimal_bgx"]); //获取从
+                        double ssz = Convert.ToDouble(JGSQL[x]["F_TIXC_Decimal_tqn"]); //获取至
+                        double bgqjg = Convert.ToDouble(JGSQL[x]["F_TIXC_Decimal_c1c"]); //获取变更前价格
+                        double bghjg = Convert.ToDouble(JGSQL[x]["F_TIXC_Decimal_vb1"]);//获取变更后价格
+
+
+
+                        var jmb = string.Format("/*dialect*/SELECT A.FSupplierID,STRING_AGG ( B.FENTRYID, ',' ) AS FENTRYID,D.F_TIXC_DECIMAL_PZG,D.F_TIXC_DECIMAL_795 FROM T_PUR_PRICELIST A LEFT JOIN T_PUR_PRICELISTENTRY B ON A.FID = B.FID LEFT JOIN T_PUR_PRICELISTENTRY_LK C ON B.FENTRYID = C.FENTRYID LEFT JOIN TIXC_t_Cust_Entry100126 D ON C.FSID = D.FENTRYID LEFT JOIN TIXC_t_Cust100085 E ON D.FID = E.FID WHERE C.FSTABLENAME = 'TIXC_t_Cust_Entry100126' 	AND A.FDOCUMENTSTATUS = 'C' AND E.F_TIXC_Combo_osy_tzk = '{0}'	AND E.F_TIXC_Combo_63n_ca9 = '{1}'	AND E.F_TIXC_Combo_pdc_re5 = '{2}'	AND E.F_TIXC_Combo_qtr_83g = '{3}'	AND E.F_TIXC_Combo_83g_uky = '{4}'	AND B.FFROMQTY = '{5}'AND B.FTOQTY = '{6}' GROUP BY	A.FSupplierID,D.F_TIXC_DECIMAL_PZG,D.F_TIXC_DECIMAL_795", ssclxl, ssmlcz, sscf, sssz, sskz, ssc, ssz);
+                        DynamicObjectCollection JMBSQL = DbUtils.ExecuteDynamicObject(this.Context, jmb);
+                        if (JMBSQL != null && JMBSQL.Count > 0)
+                        {
+                            for (int j = 0; j < JMBSQL.Count; j++)
+                            {
+                                string entryid = Convert.ToString(JMBSQL[j]["FENTRYID"]);
+                                // 下推
+                                JObject jObj = new JObject();
+                                JObject jobjs = new JObject();
+
+                                jObj.Add("Ids", ""); //单据内码
+                                jObj.Add("Numbers", "[]"); //单据编码
+                                jObj.Add("EntryIds", entryid); //单据体
+                                jObj.Add("RuleId", "PUR_PriceCategory-PUR_PAT");//转换规则 
+                                jObj.Add("TargetBillTypeId", ""); //目标单据类型内码
+                                jObj.Add("TargetFormId", ""); //目标单据FormId
+                                jObj.Add("IsEnableDefaultRule", "false"); //是否启用默认转换规则
+                                jObj.Add("IsDraftWhenSaveFail", "true"); //保存失败时是否暂存
+                                jObj.Add("CustomParams", jobjs); //自定义参数
+
+                                var resultJson = client.Push("PUR_PriceCategory", jObj.ToString()); //采购价目表
+                            }
+                        }
+
+                        var hs = string.Format("/*dialect*/SELECT A.FID, B.F_TIXC_Base_ne1, C.FNAME, B.F_TIXC_DECIMAL_PZG, B.F_TIXC_DECIMAL_795 FROM TIXC_t_Cust100085 A LEFT JOIN TIXC_t_Cust_Entry100126 B ON A.FID = B.FID LEFT JOIN T_BD_MATERIAL_L C ON B.F_TIXC_Base_ne1 = C.FMATERIALID WHERE F_TIXC_Combo_osy_tzk = '{0}' AND F_TIXC_Combo_63n_ca9 = '{1}' AND F_TIXC_Combo_pdc_re5 = '{2}' AND F_TIXC_Combo_qtr_83g = '{3}' AND F_TIXC_Combo_83g_uky = '{4}'", ssclxl, ssmlcz, sscf, sssz, sskz);
+                        DynamicObjectCollection HSSQL = DbUtils.ExecuteDynamicObject(this.Context, hs);
+                        if (HSSQL != null && HSSQL.Count > 0)
+                        {
+                            for (int i = 0; i < HSSQL.Count; i++)
+                            {
+                                string fid = Convert.ToString(HSSQL[i]["FID"]);
+                                string wlid = Convert.ToString(HSSQL[i]["F_TIXC_Base_ne1"]);
+                                string name = Convert.ToString(HSSQL[i]["FNAME"]);
+
+                                // 删除可能的重复项，确保每个区间只更新一次
+                                //var deleteDuplicateEntries = string.Format("/*dialect*/DELETE FROM T_PUR_PATENTRY WHERE FMATERIALID = '{0}' AND FFROMQTY = '{1}' AND FTOQTY = '{2}'", wlid, ssc, ssz);
+                                // DBUtils.Execute(Context, deleteDuplicateEntries);
+                                //将更改后的价格写入进去
+                                var jggg = string.Format("/*dialect*/UPDATE B SET B.F_TIXC_Decimal_qku = '{0}' FROM	TIXC_t_Cust100085 A	LEFT JOIN TIXC_t_Cust_Entry100126 B ON A.FID = B.FID WHERE	B.F_TIXC_Base_ne1 = '{1}' AND B.F_TIXC_DECIMAL_PZG = '{2}' AND B.F_TIXC_DECIMAL_795 ='{3}'", bghjg, wlid, ssc, ssz);
+                                DBUtils.Execute(Context, jggg);
+
+                                var ckdj = string.Format("/*dialect*/UPDATE A SET A.FCKDJ = '{0}' FROM T_PUR_PATENTRY A LEFT JOIN T_PUR_PAT B ON A.FID = B.FID LEFT JOIN T_PUR_PATENTRY_LK C ON A.FENTRYID = C.FENTRYID WHERE B.FDOCUMENTSTATUS = 'Z' AND A.FMATERIALID = '{1}'AND A.FFROMQTY = '{2}' AND A.FTOQTY = '{3}' ", bghjg, wlid, ssc, ssz); // 构建SQL更新语句
+                                DBUtils.Execute(Context, ckdj);
+
+                            }
+                        }
+                        //获取需要提交的采购价格调整单据ID
+                        var tjbgg = string.Format("/*dialect*/SELECT A.FID, B.FENTRYID FROM T_PUR_PAT A LEFT JOIN T_PUR_PATENTRY B ON A.FID = B.FID  WHERE A.FDOCUMENTSTATUS = 'Z'");
+                        DynamicObjectCollection tjbsql = DbUtils.ExecuteDynamicObject(this.Context, tjbgg);
+                        if (tjbsql != null && tjbsql.Count > 0)
+                        {
+                            for (int tj = 0; tj < tjbsql.Count; tj++)
+                            {
+                                string tjbfid = Convert.ToString(tjbsql[tj]["fid"]);
+                                string tjbentry = Convert.ToString(tjbsql[tj]["FENTRYID"]);
+
+                                // 保存
+                                JObject jObject = new JObject();
+                                JObject modeljObject = new JObject();
+                                modeljObject.Add("FID", tjbfid);
+                                modeljObject.Add("FNAME", "数丝基准价格变更");
+                                JObject tjyynum = new JObject();
+                                tjyynum.Add("FNumber", "TJYY05_SYS");
+                                modeljObject.Add("FPaReason", tjyynum);
+
+                                jObject.Add("Model", modeljObject);
+                                var resultJsons = client.Save("PUR_PAT", jObject.ToString());
+
+                            }
+                        }
+                        // 提交
+                        var sub = string.Format("/*dialect*/SELECT STRING_AGG(A.FID, ',') AS FID FROM T_PUR_PAT A LEFT JOIN T_PUR_PATENTRY B ON A.FID = B.FID WHERE A.FDOCUMENTSTATUS = 'A' AND A.FNAME = '数丝基准价格变更'");
+                        DynamicObjectCollection subsql = DbUtils.ExecuteDynamicObject(this.Context, sub);
+                        if (subsql != null && subsql.Count > 0)
+                        {
+                            string tjbfid = Convert.ToString(subsql[0]["FID"]);
+                            JObject submitjObj = new JObject();
+                            submitjObj.Add("Ids", tjbfid);
+                            var resultJsonss = client.Submit("PUR_PAT", submitjObj.ToString());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
